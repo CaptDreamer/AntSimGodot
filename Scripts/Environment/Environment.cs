@@ -284,7 +284,7 @@ public partial class Environment : Node2D
             CellType oldType = _grid[gridPos.X, gridPos.Y];
             _grid[gridPos.X, gridPos.Y] = type;
 
-            GD.Print($"Cell changed at {gridPos}: {oldType} -> {type}");
+            //GD.Print($"Cell changed at {gridPos}: {oldType} -> {type}");
 
             // Verify the change was made
             CellType newType = _grid[gridPos.X, gridPos.Y];

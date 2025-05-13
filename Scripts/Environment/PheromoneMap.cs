@@ -16,17 +16,24 @@ public partial class PheromoneMap : Node2D
     // Pheromone grid properties
     private float[,] _homePheromoneGrid; // Grid for home pheromones
     private float[,] _foodPheromoneGrid; // Grid for food pheromones
+    private float[,] _homePheromoneAge;  // Age tracking for home pheromones
+    private float[,] _foodPheromoneAge;  // Age tracking for food pheromones
 
     // Pheromone parameters
     [Export] public float EvaporationRate = 0.01f;  // How quickly pheromones evaporate
-    [Export] public float DiffusionRate = 0.05f;    // How much pheromones spread to neighboring cells
     [Export] public float MaxPheromone = 1.0f;      // Maximum pheromone value
+    [Export] public float PheromoneThreshold = 0.05f; // Threshold below which pheromones are removed
+    [Export] public float MaxAge = 100.0f;          // Maximum age tracking (in seconds)
 
     // Visuals
     private ImageTexture _pheromoneTextureHome;
     private ImageTexture _pheromoneTextureFood;
     private Image _imageHome;
     private Image _imageFood;
+
+    // Update control
+    [Export] public float UpdateInterval = 0.05f; // 20 updates per second
+    private float _updateTimer = 0;
 
     // Called when the node enters the scene tree
     public override void _Ready()
@@ -66,11 +73,13 @@ public partial class PheromoneMap : Node2D
     {
         Vector2I gridSize = _environment.GridSize;
 
-        // Initialize home pheromone grid
+        // Initialize pheromone grids
         _homePheromoneGrid = new float[gridSize.X, gridSize.Y];
-
-        // Initialize food pheromone grid
         _foodPheromoneGrid = new float[gridSize.X, gridSize.Y];
+
+        // Initialize age tracking grids
+        _homePheromoneAge = new float[gridSize.X, gridSize.Y];
+        _foodPheromoneAge = new float[gridSize.X, gridSize.Y];
 
         // Set all values to 0
         for (int x = 0; x < gridSize.X; x++)
@@ -79,6 +88,8 @@ public partial class PheromoneMap : Node2D
             {
                 _homePheromoneGrid[x, y] = 0.0f;
                 _foodPheromoneGrid[x, y] = 0.0f;
+                _homePheromoneAge[x, y] = 0.0f;
+                _foodPheromoneAge[x, y] = 0.0f;
             }
         }
     }
@@ -90,7 +101,7 @@ public partial class PheromoneMap : Node2D
 
         GD.Print($"Creating pheromone textures with grid size: {gridSize}");
 
-        // Create image for home pheromones (blue) - using the environment grid size
+        // Create image for home pheromones (blue)
         _imageHome = Image.CreateEmpty(gridSize.X, gridSize.Y, false, Image.Format.Rgba8);
         for (int x = 0; x < gridSize.X; x++)
         {
@@ -101,7 +112,7 @@ public partial class PheromoneMap : Node2D
         }
         _pheromoneTextureHome = ImageTexture.CreateFromImage(_imageHome);
 
-        // Create image for food pheromones (red) - using the environment grid size
+        // Create image for food pheromones (red)
         _imageFood = Image.CreateEmpty(gridSize.X, gridSize.Y, false, Image.Format.Rgba8);
         for (int x = 0; x < gridSize.X; x++)
         {
@@ -115,12 +126,12 @@ public partial class PheromoneMap : Node2D
         GD.Print($"Pheromone textures created. Texture size: {_pheromoneTextureHome.GetSize()}");
     }
 
-    // Update pheromones (evaporation and diffusion)
+    // Update pheromones (evaporation only, no diffusion)
     public override void _Process(double delta)
     {
         // Only update pheromones every few frames to save performance
         _updateTimer += (float)delta;
-        if (_updateTimer >= _updateInterval)
+        if (_updateTimer >= UpdateInterval)
         {
             UpdatePheromones(_updateTimer);
             UpdatePheromoneTextures();
@@ -129,11 +140,7 @@ public partial class PheromoneMap : Node2D
         }
     }
 
-    // Add timer variables for controlling update frequency
-    private float _updateTimer = 0;
-    private float _updateInterval = 0.05f; // Update 20 times per second
-
-    // Update pheromone values with evaporation and diffusion
+    // Update pheromone values with evaporation and age tracking
     private void UpdatePheromones(float delta)
     {
         Vector2I gridSize = _environment.GridSize;
@@ -141,11 +148,7 @@ public partial class PheromoneMap : Node2D
         // Calculate evaporation amount for this frame
         float evaporationAmount = EvaporationRate * delta;
 
-        // Create new grids for diffusion calculation
-        float[,] newHomeGrid = new float[gridSize.X, gridSize.Y];
-        float[,] newFoodGrid = new float[gridSize.X, gridSize.Y];
-
-        // Process evaporation and diffusion
+        // Process evaporation and update ages
         for (int x = 0; x < gridSize.X; x++)
         {
             for (int y = 0; y < gridSize.Y; y++)
@@ -153,69 +156,74 @@ public partial class PheromoneMap : Node2D
                 // Skip if this is a wall
                 if (_environment.GetCellType(new Vector2I(x, y)) == Environment.CellType.Wall)
                 {
+                    _homePheromoneGrid[x, y] = 0.0f;
+                    _foodPheromoneGrid[x, y] = 0.0f;
+                    _homePheromoneAge[x, y] = 0.0f;
+                    _foodPheromoneAge[x, y] = 0.0f;
                     continue;
                 }
 
                 // Process home pheromones
                 float homeValue = _homePheromoneGrid[x, y];
-                homeValue = Mathf.Max(0.0f, homeValue - evaporationAmount);
+                if (homeValue > 0.0f)
+                {
+                    // Apply evaporation
+                    homeValue = Mathf.Max(0.0f, homeValue - evaporationAmount);
+
+                    // Update age if pheromone still exists
+                    if (homeValue > PheromoneThreshold)
+                    {
+                        _homePheromoneAge[x, y] += delta;
+                        // Cap age at maximum
+                        _homePheromoneAge[x, y] = Mathf.Min(_homePheromoneAge[x, y], MaxAge);
+                    }
+                    else
+                    {
+                        // Clear small values completely
+                        homeValue = 0.0f;
+                        _homePheromoneAge[x, y] = 0.0f;
+                    }
+
+                    _homePheromoneGrid[x, y] = homeValue;
+                }
 
                 // Process food pheromones
                 float foodValue = _foodPheromoneGrid[x, y];
-                foodValue = Mathf.Max(0.0f, foodValue - evaporationAmount);
+                if (foodValue > 0.0f)
+                {
+                    // Apply evaporation
+                    foodValue = Mathf.Max(0.0f, foodValue - evaporationAmount);
 
-                // Apply diffusion
-                SpreadPheromone(newHomeGrid, x, y, homeValue);
-                SpreadPheromone(newFoodGrid, x, y, foodValue);
-            }
-        }
+                    // Update age if pheromone still exists
+                    if (foodValue > PheromoneThreshold)
+                    {
+                        _foodPheromoneAge[x, y] += delta;
+                        // Cap age at maximum
+                        _foodPheromoneAge[x, y] = Mathf.Min(_foodPheromoneAge[x, y], MaxAge);
+                    }
+                    else
+                    {
+                        // Clear small values completely
+                        foodValue = 0.0f;
+                        _foodPheromoneAge[x, y] = 0.0f;
+                    }
 
-        // Update the grids with the new values
-        _homePheromoneGrid = newHomeGrid;
-        _foodPheromoneGrid = newFoodGrid;
-    }
-
-    // Spread pheromone value to surrounding cells
-    private void SpreadPheromone(float[,] grid, int x, int y, float value)
-    {
-        // Amount to keep at current cell
-        float keepAmount = 1.0f - DiffusionRate;
-
-        // Update current cell
-        grid[x, y] += value * keepAmount;
-
-        // Amount to spread to each neighbor
-        float spreadAmount = (value * DiffusionRate) / 4.0f;
-
-        // Spread to neighbors (von Neumann neighborhood)
-        Vector2I[] neighbors = new Vector2I[]
-        {
-            new Vector2I(x + 1, y),
-            new Vector2I(x - 1, y),
-            new Vector2I(x, y + 1),
-            new Vector2I(x, y - 1)
-        };
-
-        foreach (Vector2I neighbor in neighbors)
-        {
-            if (_environment.IsValidGridPosition(neighbor) &&
-                _environment.GetCellType(neighbor) != Environment.CellType.Wall)
-            {
-                grid[neighbor.X, neighbor.Y] += spreadAmount;
+                    _foodPheromoneGrid[x, y] = foodValue;
+                }
             }
         }
     }
 
-    // Update pheromone texture visualizations
+    // Update pheromone texture visualizations - now with age-based coloring
     private void UpdatePheromoneTextures()
     {
         Vector2I gridSize = _environment.GridSize;
 
-        // Create new images each time to avoid potential issues
+        // Create new images each time
         Image newImageHome = Image.CreateEmpty(gridSize.X, gridSize.Y, false, Image.Format.Rgba8);
         Image newImageFood = Image.CreateEmpty(gridSize.X, gridSize.Y, false, Image.Format.Rgba8);
 
-        // Update pixels
+        // Update pixels with clearer age visualization
         for (int x = 0; x < gridSize.X; x++)
         {
             for (int y = 0; y < gridSize.Y; y++)
@@ -228,24 +236,59 @@ public partial class PheromoneMap : Node2D
                     continue;
                 }
 
-                // Set home pheromone pixel (blue)
+                // Set home pheromone pixel (blue) - with clearer age gradient
                 float homeValue = _homePheromoneGrid[x, y];
-                if (homeValue > 0.01f)
+                if (homeValue > 0.0f)
                 {
-                    float homeAlpha = Mathf.Min(1.0f, homeValue);
-                    newImageHome.SetPixel(x, y, new Color(0, 0, 1, homeAlpha));
+                    // Calculate normalized age (0 = new, 1 = oldest)
+                    float ageNormalized = _homePheromoneAge[x, y] / MaxAge;
+
+                    // Use age to visually show the gradient - newer is more blue, older more cyan
+                    // This makes it easier to see which direction the gradient flows
+                    Color homeColor;
+                    if (ageNormalized < 0.3f)
+                    {
+                        homeColor = new Color(0.0f, 0.0f, 1.0f, homeValue * 0.8f); // Newer: Pure Blue
+                    }
+                    else if (ageNormalized < 0.6f)
+                    {
+                        homeColor = new Color(0.0f, 0.5f, 1.0f, homeValue * 0.8f); // Medium: Blue-Cyan
+                    }
+                    else
+                    {
+                        homeColor = new Color(0.0f, 0.8f, 1.0f, homeValue * 0.8f); // Older: Cyan
+                    }
+
+                    newImageHome.SetPixel(x, y, homeColor);
                 }
                 else
                 {
                     newImageHome.SetPixel(x, y, new Color(0, 0, 0, 0));
                 }
 
-                // Set food pheromone pixel (red)
+                // Set food pheromone pixel (red) - with clearer age gradient
                 float foodValue = _foodPheromoneGrid[x, y];
-                if (foodValue > 0.01f)
+                if (foodValue > 0.0f)
                 {
-                    float foodAlpha = Mathf.Min(1.0f, foodValue);
-                    newImageFood.SetPixel(x, y, new Color(1, 0, 0, foodAlpha));
+                    // Calculate normalized age (0 = new, 1 = oldest)
+                    float ageNormalized = _foodPheromoneAge[x, y] / MaxAge;
+
+                    // Use age to visually show the gradient - newer is more red, older more yellow
+                    Color foodColor;
+                    if (ageNormalized < 0.3f)
+                    {
+                        foodColor = new Color(1.0f, 0.0f, 0.0f, foodValue * 0.8f); // Newer: Pure Red
+                    }
+                    else if (ageNormalized < 0.6f)
+                    {
+                        foodColor = new Color(1.0f, 0.5f, 0.0f, foodValue * 0.8f); // Medium: Orange
+                    }
+                    else
+                    {
+                        foodColor = new Color(1.0f, 0.8f, 0.0f, foodValue * 0.8f); // Older: Yellow-Orange
+                    }
+
+                    newImageFood.SetPixel(x, y, foodColor);
                 }
                 else
                 {
@@ -261,57 +304,13 @@ public partial class PheromoneMap : Node2D
         _pheromoneTextureFood = ImageTexture.CreateFromImage(newImageFood);
     }
 
-    // Alternative drawing approach - draw pheromones directly as rectangles
-    private void DrawPheromoneGrids()
-    {
-        Vector2I gridSize = _environment.GridSize;
-        Vector2I cellSize = _environment.CellSize;
-
-        for (int x = 0; x < gridSize.X; x++)
-        {
-            for (int y = 0; y < gridSize.Y; y++)
-            {
-                Vector2I cellPos = new Vector2I(x, y);
-                Vector2 worldPos = new Vector2(x * cellSize.X, y * cellSize.Y);
-
-                // Skip walls
-                if (_environment.GetCellType(cellPos) == Environment.CellType.Wall)
-                {
-                    continue;
-                }
-
-                // Draw home pheromone (blue)
-                float homeValue = _homePheromoneGrid[x, y];
-                if (homeValue > 0.01f)
-                {
-                    float homeAlpha = Mathf.Min(0.5f, homeValue);
-                    DrawRect(new Rect2(worldPos, cellSize), new Color(0, 0, 1, homeAlpha), true);
-                }
-
-                // Draw food pheromone (red)
-                float foodValue = _foodPheromoneGrid[x, y];
-                if (foodValue > 0.01f)
-                {
-                    float foodAlpha = Mathf.Min(0.5f, foodValue);
-                    DrawRect(new Rect2(worldPos, cellSize), new Color(1, 0, 0, foodAlpha), true);
-                }
-            }
-        }
-    }
-
-    // Draw the pheromone textures or grids
+    // Draw the pheromone textures
     public override void _Draw()
     {
-        // Try both approaches - uncomment the one that works better
-
-        // Approach 1: Draw using textures
         DrawPheromoneTextures();
-
-        // Approach 2: Draw directly using rectangles
-        // DrawPheromoneGrids();
     }
 
-    // Draw the pheromone textures using TextureRect
+    // Draw the pheromone textures
     private void DrawPheromoneTextures()
     {
         Vector2I gridSize = _environment.GridSize;
@@ -326,29 +325,37 @@ public partial class PheromoneMap : Node2D
         // Only draw if textures are valid
         if (_pheromoneTextureHome != null)
         {
-            // Draw home pheromone texture (blue) stretched to cover the environment
-            DrawTextureRect(_pheromoneTextureHome, destinationRect, false, new Color(1, 1, 1, 0.3f));
+            // Draw home pheromone texture (blue)
+            DrawTextureRect(_pheromoneTextureHome, destinationRect, false, new Color(1, 1, 1, 0.4f));
         }
 
         if (_pheromoneTextureFood != null)
         {
-            // Draw food pheromone texture (red) stretched to cover the environment
-            DrawTextureRect(_pheromoneTextureFood, destinationRect, false, new Color(1, 1, 1, 0.3f));
+            // Draw food pheromone texture (red)
+            DrawTextureRect(_pheromoneTextureFood, destinationRect, false, new Color(1, 1, 1, 0.4f));
         }
     }
 
-    // Add pheromone at a specific grid position
+    // Add pheromone at a specific grid position - now resets age on fresh deposit
     public void AddPheromone(Vector2I gridPos, PheromoneType type, float amount)
     {
         if (_environment.IsValidGridPosition(gridPos))
         {
             if (type == PheromoneType.Home)
             {
+                // Reset age when adding fresh pheromone or increasing existing
+                _homePheromoneAge[gridPos.X, gridPos.Y] = 0.0f;
+
+                // Add pheromone value
                 _homePheromoneGrid[gridPos.X, gridPos.Y] =
                     Mathf.Min(MaxPheromone, _homePheromoneGrid[gridPos.X, gridPos.Y] + amount);
             }
             else
             {
+                // Reset age when adding fresh pheromone or increasing existing
+                _foodPheromoneAge[gridPos.X, gridPos.Y] = 0.0f;
+
+                // Add pheromone value
                 _foodPheromoneGrid[gridPos.X, gridPos.Y] =
                     Mathf.Min(MaxPheromone, _foodPheromoneGrid[gridPos.X, gridPos.Y] + amount);
             }
@@ -367,6 +374,23 @@ public partial class PheromoneMap : Node2D
             else
             {
                 return _foodPheromoneGrid[gridPos.X, gridPos.Y];
+            }
+        }
+        return 0.0f;
+    }
+
+    // Get pheromone age at a specific grid position
+    public float GetPheromoneAge(Vector2I gridPos, PheromoneType type)
+    {
+        if (_environment.IsValidGridPosition(gridPos))
+        {
+            if (type == PheromoneType.Home)
+            {
+                return _homePheromoneAge[gridPos.X, gridPos.Y];
+            }
+            else
+            {
+                return _foodPheromoneAge[gridPos.X, gridPos.Y];
             }
         }
         return 0.0f;
