@@ -25,6 +25,10 @@ public partial class Environment : Node2D
     private Color _foodColor = new Color(0.0f, 0.7f, 0.0f);
     private Color _homeColor = new Color(0.7f, 0.0f, 0.0f);
 
+    // Debug mode
+    [Export] public bool DebugMode = false;
+    [Export] public bool ShowGrid = false;
+
     // Signals
     [Signal] public delegate void FoodPlacedEventHandler(Vector2I position);
     [Signal] public delegate void WallPlacedEventHandler(Vector2I position);
@@ -37,10 +41,11 @@ public partial class Environment : Node2D
         // Initialize the grid
         InitializeGrid();
 
-        // Add test walls
-        SetCellType(new Vector2I(10, 10), CellType.Wall);
+        // Create boundary walls
+        CreateBoundaryWalls();
 
         GD.Print("Environment ready. Grid size: " + GridSize + ", Cell size: " + CellSize);
+        GD.Print("Left-click to place walls, right-click to place food. Hold Shift+click to remove.");
     }
 
     // Initialize the grid with empty cells
@@ -61,13 +66,27 @@ public partial class Environment : Node2D
         Vector2I homePos = new Vector2I(GridSize.X / 2, GridSize.Y / 2);
         SetCellType(homePos, CellType.Home);
 
-        // Add test walls in corners to verify drawing
-        SetCellType(new Vector2I(0, 0), CellType.Wall);
-        SetCellType(new Vector2I(GridSize.X - 1, 0), CellType.Wall);
-        SetCellType(new Vector2I(0, GridSize.Y - 1), CellType.Wall);
-        SetCellType(new Vector2I(GridSize.X - 1, GridSize.Y - 1), CellType.Wall);
+        GD.Print("Grid initialized with home at center");
+    }
 
-        GD.Print("Grid initialized with test walls in corners");
+    // Create boundary walls around the entire grid
+    public void CreateBoundaryWalls()
+    {
+        // Add walls on the top and bottom edges
+        for (int x = 0; x < GridSize.X; x++)
+        {
+            SetCellType(new Vector2I(x, 0), CellType.Wall);
+            SetCellType(new Vector2I(x, GridSize.Y - 1), CellType.Wall);
+        }
+
+        // Add walls on the left and right edges
+        for (int y = 0; y < GridSize.Y; y++)
+        {
+            SetCellType(new Vector2I(0, y), CellType.Wall);
+            SetCellType(new Vector2I(GridSize.X - 1, y), CellType.Wall);
+        }
+
+        GD.Print("Boundary walls created");
     }
 
     // Process direct input
@@ -81,30 +100,8 @@ public partial class Environment : Node2D
 
                 if (IsValidGridPosition(gridPos))
                 {
-                    if (mouseButton.ButtonIndex == MouseButton.Left)
-                    {
-                        // Left click to place wall
-                        if (Input.IsKeyPressed(Key.Shift))
-                        {
-                            // With shift held, remove wall
-                            if (GetCellType(gridPos) == CellType.Wall)
-                            {
-                                SetCellType(gridPos, CellType.Empty);
-                                EmitSignal(SignalName.WallRemoved, gridPos);
-                            }
-                        }
-                        else
-                        {
-                            // Place wall
-                            if (GetCellType(gridPos) == CellType.Empty)
-                            {
-                                SetCellType(gridPos, CellType.Wall);
-                                EmitSignal(SignalName.WallPlaced, gridPos);
-                                GD.Print($"Wall placed at {gridPos}");
-                            }
-                        }
-                    }
-                    else if (mouseButton.ButtonIndex == MouseButton.Right)
+                    // Only use right mouse button now for food placement/removal
+                    if (mouseButton.ButtonIndex == MouseButton.Right)
                     {
                         // Right click to place food
                         if (Input.IsKeyPressed(Key.Shift))
@@ -118,7 +115,7 @@ public partial class Environment : Node2D
                         }
                         else
                         {
-                            // Place food
+                            // Don't overwrite home or wall
                             if (GetCellType(gridPos) == CellType.Empty)
                             {
                                 SetCellType(gridPos, CellType.Food);
@@ -137,30 +134,8 @@ public partial class Environment : Node2D
 
             if (IsValidGridPosition(gridPos))
             {
-                // Left mouse button held down
-                if ((motion.ButtonMask & MouseButtonMask.Left) != 0)
-                {
-                    if (Input.IsKeyPressed(Key.Shift))
-                    {
-                        // Erase walls
-                        if (GetCellType(gridPos) == CellType.Wall)
-                        {
-                            SetCellType(gridPos, CellType.Empty);
-                            EmitSignal(SignalName.WallRemoved, gridPos);
-                        }
-                    }
-                    else
-                    {
-                        // Draw walls
-                        if (GetCellType(gridPos) == CellType.Empty)
-                        {
-                            SetCellType(gridPos, CellType.Wall);
-                            EmitSignal(SignalName.WallPlaced, gridPos);
-                        }
-                    }
-                }
-                // Right mouse button held down
-                else if ((motion.ButtonMask & MouseButtonMask.Right) != 0)
+                // Only handle right mouse button for food placement/removal
+                if ((motion.ButtonMask & MouseButtonMask.Right) != 0)
                 {
                     if (Input.IsKeyPressed(Key.Shift))
                     {
@@ -173,7 +148,7 @@ public partial class Environment : Node2D
                     }
                     else
                     {
-                        // Draw food
+                        // Draw food - don't overwrite home or wall
                         if (GetCellType(gridPos) == CellType.Empty)
                         {
                             SetCellType(gridPos, CellType.Food);
@@ -218,10 +193,25 @@ public partial class Environment : Node2D
             }
         }
 
-        // Draw test walls explicitly regardless of grid state
-        DrawRect(new Rect2(GridToWorld(new Vector2I(15, 15)), CellSize), new Color(0, 0, 0, 1), true);
-        DrawRect(new Rect2(GridToWorld(new Vector2I(16, 15)), CellSize), new Color(0, 0, 0, 1), true);
-        DrawRect(new Rect2(GridToWorld(new Vector2I(17, 15)), CellSize), new Color(0, 0, 0, 1), true);
+        // Draw grid lines in debug mode
+        if (ShowGrid)
+        {
+            // Draw horizontal grid lines
+            for (int y = 0; y <= GridSize.Y; y++)
+            {
+                Vector2 start = new Vector2(0, y * CellSize.Y);
+                Vector2 end = new Vector2(GridSize.X * CellSize.X, y * CellSize.Y);
+                DrawLine(start, end, new Color(0.5f, 0.5f, 0.5f, 0.2f));
+            }
+
+            // Draw vertical grid lines
+            for (int x = 0; x <= GridSize.X; x++)
+            {
+                Vector2 start = new Vector2(x * CellSize.X, 0);
+                Vector2 end = new Vector2(x * CellSize.X, GridSize.Y * CellSize.Y);
+                DrawLine(start, end, new Color(0.5f, 0.5f, 0.5f, 0.2f));
+            }
+        }
     }
 
     // Helper methods for grid operations
@@ -235,18 +225,31 @@ public partial class Environment : Node2D
     // Called every frame
     public override void _Process(double delta)
     {
-        // Debug - if T key is pressed, output current mouse position details
-        if (Input.IsKeyPressed(Key.T))
+        // Toggle grid visibility with G key
+        if (Input.IsKeyPressed(Key.I))
         {
-            Vector2 mousePos = GetGlobalMousePosition();
-            Vector2I gridPos = WorldToGrid(mousePos);
-            CellType cellType = GetCellType(gridPos);
-
-            GD.Print($"Mouse at {mousePos}, Grid: {gridPos}, Cell type: {cellType}");
-
-            // Force place a wall here regardless of cell state
-            _grid[gridPos.X, gridPos.Y] = CellType.Wall;
+            ShowGrid = !ShowGrid;
             QueueRedraw();
+            GD.Print($"Grid visibility: {(ShowGrid ? "ON" : "OFF")}");
+        }
+
+        // Add random food with F1 key
+        if (Input.IsKeyPressed(Key.F1))
+        {
+            AddRandomFood(10);
+        }
+
+        // Add maze pattern with F2 key
+        if (Input.IsKeyPressed(Key.F2))
+        {
+            CreateSimpleMaze();
+        }
+
+        // Reset environment with F3 key
+        if (Input.IsKeyPressed(Key.F3))
+        {
+            ClearAllExceptBoundary();
+            GD.Print("Environment reset - boundaries preserved");
         }
     }
 
@@ -284,15 +287,6 @@ public partial class Environment : Node2D
             CellType oldType = _grid[gridPos.X, gridPos.Y];
             _grid[gridPos.X, gridPos.Y] = type;
 
-            //GD.Print($"Cell changed at {gridPos}: {oldType} -> {type}");
-
-            // Verify the change was made
-            CellType newType = _grid[gridPos.X, gridPos.Y];
-            if (newType != type)
-            {
-                GD.Print($"ERROR: Cell type not changed correctly! Current value: {newType}");
-            }
-
             QueueRedraw(); // Request redraw of the node
         }
     }
@@ -321,5 +315,130 @@ public partial class Environment : Node2D
     {
         List<Vector2I> homeCells = GetCellsOfType(CellType.Home);
         return homeCells.Count > 0 ? homeCells[0] : new Vector2I(GridSize.X / 2, GridSize.Y / 2);
+    }
+
+    // Add random food to the environment
+    public void AddRandomFood(int count)
+    {
+        Random random = new Random();
+        int foodAdded = 0;
+        int attempts = 0;
+
+        while (foodAdded < count && attempts < count * 10)
+        {
+            // Generate a random position (avoiding edges)
+            int x = random.Next(2, GridSize.X - 2);
+            int y = random.Next(2, GridSize.Y - 2);
+            Vector2I pos = new Vector2I(x, y);
+
+            // Only place food on empty cells
+            if (GetCellType(pos) == CellType.Empty)
+            {
+                SetCellType(pos, CellType.Food);
+                EmitSignal(SignalName.FoodPlaced, pos);
+                foodAdded++;
+            }
+
+            attempts++;
+        }
+
+        GD.Print($"Added {foodAdded} random food items");
+    }
+
+    // Create a simple maze pattern
+    public void CreateSimpleMaze()
+    {
+        Random random = new Random();
+
+        // First clear existing walls (except boundary)
+        for (int x = 1; x < GridSize.X - 1; x++)
+        {
+            for (int y = 1; y < GridSize.Y - 1; y++)
+            {
+                if (_grid[x, y] == CellType.Wall)
+                {
+                    SetCellType(new Vector2I(x, y), CellType.Empty);
+                }
+            }
+        }
+
+        // Create horizontal "lanes" every 8-12 cells
+        for (int y = 8; y < GridSize.Y - 8; y += random.Next(8, 13))
+        {
+            int gapPos = random.Next(5, GridSize.X - 5);
+
+            for (int x = 1; x < GridSize.X - 1; x++)
+            {
+                // Leave a gap for paths
+                if (Math.Abs(x - gapPos) <= 2)
+                    continue;
+
+                // Don't overwrite home or food
+                Vector2I pos = new Vector2I(x, y);
+                if (GetCellType(pos) == CellType.Empty)
+                {
+                    SetCellType(pos, CellType.Wall);
+                }
+            }
+        }
+
+        // Create vertical "lanes" every 8-12 cells
+        for (int x = 8; x < GridSize.X - 8; x += random.Next(8, 13))
+        {
+            int gapPos = random.Next(5, GridSize.Y - 5);
+
+            for (int y = 1; y < GridSize.Y - 1; y++)
+            {
+                // Leave a gap for paths
+                if (Math.Abs(y - gapPos) <= 2)
+                    continue;
+
+                // Don't overwrite home or food
+                Vector2I pos = new Vector2I(x, y);
+                if (GetCellType(pos) == CellType.Empty)
+                {
+                    SetCellType(pos, CellType.Wall);
+                }
+            }
+        }
+
+        // Add some random walls
+        for (int i = 0; i < GridSize.X * GridSize.Y / 50; i++)
+        {
+            int x = random.Next(3, GridSize.X - 3);
+            int y = random.Next(3, GridSize.Y - 3);
+            Vector2I pos = new Vector2I(x, y);
+
+            if (GetCellType(pos) == CellType.Empty)
+            {
+                SetCellType(pos, CellType.Wall);
+            }
+        }
+
+        GD.Print("Created simple maze pattern");
+    }
+
+    // Clear everything except the boundary walls
+    public void ClearAllExceptBoundary()
+    {
+        // Reset grid to empty, preserving boundary walls
+        for (int x = 1; x < GridSize.X - 1; x++)
+        {
+            for (int y = 1; y < GridSize.Y - 1; y++)
+            {
+                // Exclude the home cell
+                Vector2I homePos = GetHomePosition();
+                if (x == homePos.X && y == homePos.Y)
+                {
+                    SetCellType(new Vector2I(x, y), CellType.Home);
+                }
+                else
+                {
+                    SetCellType(new Vector2I(x, y), CellType.Empty);
+                }
+            }
+        }
+
+        QueueRedraw();
     }
 }

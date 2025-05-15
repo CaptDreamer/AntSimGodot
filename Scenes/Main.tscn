@@ -15,6 +15,8 @@ offset = Vector2(512, 300)
 
 [node name="PheromoneMap" type="Node2D" parent="."]
 script = ExtResource("2_idj7w")
+EvaporationRate = 0.005
+MaxPheromone = 1.5
 
 [node name="AntManager" type="Node2D" parent="."]
 script = ExtResource("3_kln2b")
