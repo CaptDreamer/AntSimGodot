@@ -1,0 +1,6 @@
+res://Scripts/Ants/Ant.cs
+res://Scripts/Environment/PheromoneMap.cs
+res://Scripts/Ants/AntManager.cs
+res://Scripts/Environment/Environment.cs
+res://Scenes/Ant.tscn
+res://Scenes/Main.tscn

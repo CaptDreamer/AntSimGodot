@@ -18,6 +18,12 @@ public partial class Ant : CharacterBody2D
     [Export] public float SensorOffsetDst = 8.0f;
     [Export] public float SensorSize = 1.0f;
 
+    // Selection and debugging
+    public bool IsSelected { get; private set; } = false;
+    private static Ant _selectedAnt = null;
+    private float _debugTimer = 0f;
+    private const float DEBUG_INTERVAL = 0.5f; // Only print debug info every half second
+
     // State
     public bool CarryingFood = false;
     private List<Vector2I> _foodSource = new List<Vector2I>();
@@ -28,6 +34,7 @@ public partial class Ant : CharacterBody2D
     // Visualization
     [Export] public Color AntColor = new Color(0.0f, 0.0f, 0.0f);
     [Export] public Color CarryingFoodColor = new Color(0.7f, 0.5f, 0.0f);
+    [Export] public Color SelectedColor = new Color(0.0f, 1.0f, 1.0f);
 
     // Called when the node enters the scene tree
     public override void _Ready()
@@ -36,6 +43,50 @@ public partial class Ant : CharacterBody2D
         float randomAngle = (float)(GD.Randf() * Mathf.Pi * 2);
         _velocity = new Vector2(Mathf.Cos(randomAngle), Mathf.Sin(randomAngle)).Normalized() * MoveSpeed;
         Rotation = randomAngle;
+    }
+
+    // Toggle selection state
+    public void ToggleSelection()
+    {
+        // If this ant is already selected, deselect it
+        if (IsSelected)
+        {
+            IsSelected = false;
+            _selectedAnt = null;
+            DebugLog("Deselected");
+        }
+        // Otherwise, select this ant and deselect any other
+        else
+        {
+            if (_selectedAnt != null)
+                _selectedAnt.IsSelected = false;
+
+            IsSelected = true;
+            _selectedAnt = this;
+            DebugLog("Selected");
+
+            // Print current state information
+            Vector2I gridPos = _environment.WorldToGrid(Position);
+            DebugLog($"Position: {Position}, Grid: {gridPos}, Carrying Food: {CarryingFood}");
+            DebugLog($"Velocity: {_velocity}, Speed: {_velocity.Length()}");
+
+            // Print pheromone info at current position
+            float homePhero = _pheromoneMap.GetPheromone(gridPos, PheromoneMap.PheromoneType.Home);
+            float foodPhero = _pheromoneMap.GetPheromone(gridPos, PheromoneMap.PheromoneType.Food);
+            DebugLog($"Pheromones at position - Home: {homePhero:F3}, Food: {foodPhero:F3}");
+        }
+
+        // Update appearance
+        UpdateAppearance();
+    }
+
+    // Helper method for debug logging - only prints for selected ant
+    private void DebugLog(string message)
+    {
+        if (IsSelected)
+        {
+            GD.Print($"Ant #{GetInstanceId()}: {message}");
+        }
     }
 
     // Physics process for movement
@@ -65,13 +116,44 @@ public partial class Ant : CharacterBody2D
         MoveAndSlide();
 
         // Update rotation to match velocity
-        Rotation = Mathf.Atan2(_velocity.Y, _velocity.X);
+        // Rotation = Mathf.Atan2(_velocity.Y, _velocity.X);  // REMOVE THIS LINE
+
+        // Instead, rotate the ant gradually toward its velocity direction
+        float targetRotation = Mathf.Atan2(_velocity.Y, _velocity.X);
+        float rotationDifference = Mathf.AngleDifference(Rotation, targetRotation);
+        Rotation += rotationDifference * 0.2f; // Gradually turn toward movement direction
 
         // Check for collision with food or home
         CheckInteraction();
 
         // Update appearance based on state
         UpdateAppearance();
+
+        // Update debug info periodically if selected
+        if (IsSelected)
+        {
+            _debugTimer += (float)delta;
+            if (_debugTimer >= DEBUG_INTERVAL)
+            {
+                _debugTimer = 0;
+
+                // Log current position and pheromones
+                Vector2I gridPos = _environment.WorldToGrid(Position);
+                float homePhero = _pheromoneMap.GetPheromone(gridPos, PheromoneMap.PheromoneType.Home);
+                float foodPhero = _pheromoneMap.GetPheromone(gridPos, PheromoneMap.PheromoneType.Food);
+
+                DebugLog($"Position: {gridPos}, Home Phero: {homePhero:F3}, Food Phero: {foodPhero:F3}");
+
+                // Get which pheromone we're following
+                PheromoneMap.PheromoneType followingType = CarryingFood ?
+                    PheromoneMap.PheromoneType.Home : PheromoneMap.PheromoneType.Food;
+                DebugLog($"Following: {followingType} pheromone");
+
+                // Get sensor readings
+                SensorInfo info = Sense(followingType);
+                DebugLog($"Sensors: L={info.leftValue:F3}, C={info.centerValue:F3}, R={info.rightValue:F3}");
+            }
+        }
     }
 
     // Calculate steering forces
@@ -79,58 +161,110 @@ public partial class Ant : CharacterBody2D
     {
         Vector2 desiredDirection = Vector2.Zero;
 
-        // Determine which pheromone to follow based on state
+        // CRITICAL FIX: This is CORRECT - we follow the gradient that leads to our goal
+        // When carrying food: follow HOME pheromones (blue) to get back to nest
+        // When seeking food: follow FOOD pheromones (red) to find food sources
         PheromoneMap.PheromoneType pheromoneToFollow = CarryingFood
-            ? PheromoneMap.PheromoneType.Home
-            : PheromoneMap.PheromoneType.Food;
+            ? PheromoneMap.PheromoneType.Home  // Blue leads to home
+            : PheromoneMap.PheromoneType.Food; // Red leads to food
+
+        // Debug output to confirm which pheromone we're following
+        if (IsSelected)
+        {
+            DebugLog($"State: {(CarryingFood ? "Carrying Food" : "Seeking Food")}, Following: {pheromoneToFollow}");
+        }
 
         // Get information from sensors
         SensorInfo sensorInfo = Sense(pheromoneToFollow);
 
-        // Detect walls and avoid them
+        // Detect walls and avoid them - always high priority
         Vector2 wallAvoidanceForce = GetWallAvoidanceForce();
         desiredDirection += wallAvoidanceForce * 4.0f;  // High priority for wall avoidance
 
-        // Follow pheromone trail
-        if (sensorInfo.centerValue > 0.01f || sensorInfo.leftValue > 0.01f || sensorInfo.rightValue > 0.01f)
+        // IMPROVED sensing and response for better trail following
+        float maxSensorValue = Mathf.Max(sensorInfo.centerValue,
+                                        Mathf.Max(sensorInfo.leftValue, sensorInfo.rightValue));
+
+        // Lower threshold to detect weaker pheromone trails (0.05f -> 0.03f)
+        if (maxSensorValue > 0.03f)
         {
-            // Determine steering direction based on sensor values
+            // Calculate forward, left, and right directions
+            Vector2 forwardDir = _velocity.Normalized();
+            Vector2 leftDir = forwardDir.Rotated(-SensorAngleDegrees * Mathf.Pi / 180.0f);
+            Vector2 rightDir = forwardDir.Rotated(SensorAngleDegrees * Mathf.Pi / 180.0f);
+
+            // Simple direction selection based on strongest pheromone
+            // INCREASED multiplier for stronger following behavior (3.0f -> 5.0f)
+            float pheromoneFollowStrength = 5.0f;
+
+            // Scale strength based on pheromone intensity for more natural movement
+            // Stronger pheromones result in more determined following
+            float strengthModifier = 1.0f + (maxSensorValue * 2.0f); // Up to 3x stronger when full pheromone strength
+            pheromoneFollowStrength *= strengthModifier;
+
+            if (IsSelected)
+            {
+                DebugLog($"Pheromone strength: {maxSensorValue:F2}, Follow force: {pheromoneFollowStrength:F2}");
+            }
+
+            // Determine which direction has the strongest pheromone
             if (sensorInfo.centerValue > sensorInfo.leftValue && sensorInfo.centerValue > sensorInfo.rightValue)
             {
-                // Center has strongest pheromone, continue forward
-                desiredDirection += _velocity.Normalized();
+                // Center has strongest pheromone - continue forward
+                desiredDirection += forwardDir * pheromoneFollowStrength;
+                if (IsSelected) DebugLog("Following center direction");
             }
             else if (sensorInfo.leftValue > sensorInfo.rightValue)
             {
-                // Left has strongest pheromone, steer left
-                desiredDirection += _velocity.Rotated(-SensorAngleDegrees * Mathf.Pi / 180.0f).Normalized();
+                // Left has strongest pheromone - steer left
+                // Make turns slightly sharper for better trail following
+                Vector2 turnDir = forwardDir.Rotated(-SensorAngleDegrees * 1.2f * Mathf.Pi / 180.0f);
+                desiredDirection += turnDir * pheromoneFollowStrength;
+                if (IsSelected) DebugLog("Following left direction");
             }
             else
             {
-                // Right has strongest pheromone, steer right
-                desiredDirection += _velocity.Rotated(SensorAngleDegrees * Mathf.Pi / 180.0f).Normalized();
+                // Right has strongest pheromone - steer right
+                // Make turns slightly sharper for better trail following
+                Vector2 turnDir = forwardDir.Rotated(SensorAngleDegrees * 1.2f * Mathf.Pi / 180.0f);
+                desiredDirection += turnDir * pheromoneFollowStrength;
+                if (IsSelected) DebugLog("Following right direction");
             }
 
-            // Scale by strongest value
-            float strongestValue = Mathf.Max(sensorInfo.centerValue, Mathf.Max(sensorInfo.leftValue, sensorInfo.rightValue));
-            desiredDirection *= strongestValue * 2.0f;  // Stronger influence for stronger trails
+            // When following a strong trail, reduce random movement to a minimum
+            // Only add a tiny amount of wander for natural-looking movement
+            desiredDirection += GetWanderForce() * (WanderStrength * 0.1f);
         }
         else
         {
-            // No pheromone trail found, add random wander
+            // No pheromone trail found, add random wander at full strength
             desiredDirection += GetWanderForce() * WanderStrength;
+            if (IsSelected) DebugLog("No pheromone detected, wandering");
 
-            // If carrying food and lost, try to head home
+            // Direct homing/food seeking behavior remains unchanged
             if (CarryingFood)
             {
-                // Calculate vector to home
+                // When carrying food and lost, try to head home directly
                 Vector2 homeWorldPos = _environment.GridToWorld(_homePosition) +
                                      new Vector2(_environment.CellSize.X / 2, _environment.CellSize.Y / 2);
                 Vector2 toHome = (homeWorldPos - Position).Normalized();
 
-                // Add home-seeking force when lost
-                float homeInfluence = 0.5f;
-                desiredDirection += toHome * homeInfluence;
+                // Increase home-seeking force when lost (0.8f -> 1.2f)
+                desiredDirection += toHome * 1.2f;
+
+                if (IsSelected) DebugLog("Lost with food - heading directly home");
+            }
+            else if (_foodSource.Count > 0)
+            {
+                // When seeking food and lost but knowing a food source, head there
+                Vector2 foodWorldPos = _environment.GridToWorld(_foodSource[0]) +
+                                     new Vector2(_environment.CellSize.X / 2, _environment.CellSize.Y / 2);
+                Vector2 toFood = (foodWorldPos - Position).Normalized();
+
+                // Slightly stronger pull toward known food (0.4f -> 0.6f)
+                desiredDirection += toFood * 0.6f;
+
+                if (IsSelected) DebugLog("Lost but knowing food - heading to food source");
             }
         }
 
@@ -138,6 +272,8 @@ public partial class Ant : CharacterBody2D
         Vector2 steeringForce = Vector2.Zero;
         if (desiredDirection.LengthSquared() > 0.01f)
         {
+            // We want to steer toward our desired direction
+            // This approach creates a force that tries to align our velocity with desired direction
             steeringForce = (desiredDirection.Normalized() * MoveSpeed - _velocity);
         }
 
@@ -147,16 +283,22 @@ public partial class Ant : CharacterBody2D
     // Sense the environment using three points
     private SensorInfo Sense(PheromoneMap.PheromoneType pheromoneType)
     {
-        // Get forward direction
-        Vector2 forwardDir = _velocity.Normalized();
+        // IMPORTANT CHANGE: Use the ant's forward direction based on its visual orientation
+        // instead of velocity direction
+        Vector2 forwardDir = new Vector2(Mathf.Cos(Rotation), Mathf.Sin(Rotation));
+
+        // Calculate sensor positions using a fixed sensing cone in front of the ant
+        float sensorAngle = 35.0f; // Degrees - reasonable angle for sensing
+        Vector2 leftSensorDir = forwardDir.Rotated(-sensorAngle * Mathf.Pi / 180.0f);
+        Vector2 rightSensorDir = forwardDir.Rotated(sensorAngle * Mathf.Pi / 180.0f);
+
+        // Fixed sensor distance
+        float sensorDistance = 12.0f;
 
         // Calculate sensor positions
-        Vector2 leftSensorDir = forwardDir.Rotated(-SensorAngleDegrees * Mathf.Pi / 180.0f);
-        Vector2 rightSensorDir = forwardDir.Rotated(SensorAngleDegrees * Mathf.Pi / 180.0f);
-
-        Vector2 leftSensorPos = Position + leftSensorDir * SensorOffsetDst;
-        Vector2 centerSensorPos = Position + forwardDir * SensorOffsetDst;
-        Vector2 rightSensorPos = Position + rightSensorDir * SensorOffsetDst;
+        Vector2 leftSensorPos = Position + leftSensorDir * sensorDistance;
+        Vector2 centerSensorPos = Position + forwardDir * sensorDistance;
+        Vector2 rightSensorPos = Position + rightSensorDir * sensorDistance;
 
         // Sample pheromone values at sensor positions
         float leftValue = SamplePheromone(leftSensorPos, pheromoneType);
@@ -167,7 +309,10 @@ public partial class Ant : CharacterBody2D
         {
             leftValue = leftValue,
             centerValue = centerValue,
-            rightValue = rightValue
+            rightValue = rightValue,
+            leftPos = leftSensorPos,
+            centerPos = centerSensorPos,
+            rightPos = rightSensorPos
         };
     }
 
@@ -184,8 +329,9 @@ public partial class Ant : CharacterBody2D
         if (_environment.GetCellType(gridPos) == Environment.CellType.Wall)
             return 0.0f;
 
-        // Return pheromone value
-        return _pheromoneMap.GetPheromone(gridPos, pheromoneType);
+        // Return the SPECIFIC pheromone value requested
+        float value = _pheromoneMap.GetPheromone(gridPos, pheromoneType);
+        return value;
     }
 
     // Calculate random wander force
@@ -258,14 +404,20 @@ public partial class Ant : CharacterBody2D
                     // Remember this food source
                     if (!_foodSource.Contains(gridPos))
                     {
+                        _foodSource.Clear(); // Only remember the most recent food source
                         _foodSource.Add(gridPos);
                     }
 
-                    // Deposit strong food pheromone
+                    // CRITICAL: Deposit a STRONG food pheromone at the food source
+                    // This creates a clear signal for other ants to find food
                     _pheromoneMap.AddPheromone(gridPos, PheromoneMap.PheromoneType.Food, 1.0f);
 
-                    // Turn around
-                    _velocity = -_velocity;
+                    DebugLog("Found food! Deposited strong food pheromone and turning around");
+
+                    // Turn around - use direct vector to home for more efficient return
+                    Vector2 homeWorldPos = _environment.GridToWorld(_homePosition) +
+                                         new Vector2(_environment.CellSize.X / 2, _environment.CellSize.Y / 2);
+                    _velocity = (homeWorldPos - Position).Normalized() * MoveSpeed;
                 }
                 break;
 
@@ -277,20 +429,26 @@ public partial class Ant : CharacterBody2D
 
                     // Deposit strong home pheromone
                     _pheromoneMap.AddPheromone(gridPos, PheromoneMap.PheromoneType.Home, 1.0f);
+                    DebugLog("Dropped off food at home! Deposited strong home pheromone");
 
-                    // If we know where food is, head back there
+                    // If we know where food is, head back there with more determination
                     if (_foodSource.Count > 0)
                     {
-                        // Turn toward food source
+                        // Turn toward food source directly
                         Vector2I foodPos = _foodSource[0];
                         Vector2 foodWorldPos = _environment.GridToWorld(foodPos) +
                                             new Vector2(_environment.CellSize.X / 2, _environment.CellSize.Y / 2);
                         _velocity = (foodWorldPos - Position).Normalized() * MoveSpeed;
+
+                        // Add slight randomization to prevent all ants taking exactly the same path
+                        _velocity = _velocity.Rotated((float)(GD.Randf() * 0.2f - 0.1f));
+                        DebugLog($"Heading back to known food at {foodPos}");
                     }
                     else
                     {
-                        // Turn around
-                        _velocity = -_velocity;
+                        // Turn around with some randomization to explore
+                        _velocity = _velocity.Rotated((float)(GD.Randf() * Mathf.Pi * 0.5f - Mathf.Pi * 0.25f)) * MoveSpeed;
+                        DebugLog("No known food source, exploring");
                     }
                 }
                 break;
@@ -298,6 +456,7 @@ public partial class Ant : CharacterBody2D
             case Environment.CellType.Wall:
                 // Bounce off wall
                 _velocity = GetWallAvoidanceForce().Normalized() * MoveSpeed;
+                DebugLog("Hit wall, bouncing");
                 break;
         }
     }
@@ -310,15 +469,45 @@ public partial class Ant : CharacterBody2D
         if (!_environment.IsValidGridPosition(gridPos))
             return;
 
+        // Skip if this is a wall
+        if (_environment.GetCellType(gridPos) == Environment.CellType.Wall)
+            return;
+
+        // ABSOLUTELY CLEAR PHEROMONE DEPOSITION LOGIC:
+
+        // 1. Ants carrying food deposit FOOD pheromones (red)
+        // These lead TO food sources (for food-seeking ants to follow)
         if (CarryingFood)
         {
-            // When carrying food, deposit FOOD pheromone (trail to food)
-            _pheromoneMap.AddPheromone(gridPos, PheromoneMap.PheromoneType.Food, 0.1f);
+            // When carrying food, deposit FOOD pheromone (red)
+            // The strength is higher when further from home to create a gradient
+            Vector2 homeWorldPos = _environment.GridToWorld(_homePosition) +
+                                 new Vector2(_environment.CellSize.X / 2, _environment.CellSize.Y / 2);
+            float distanceToHome = Position.DistanceTo(homeWorldPos);
+            float maxDistance = 300.0f;
+
+            // Strength increases with distance from home (stronger near food)
+            float strength = 0.3f * Mathf.Clamp(distanceToHome / maxDistance, 0.3f, 1.0f);
+
+            // CRITICAL: Deposit FOOD (red) pheromone that other ants will follow TO food
+            _pheromoneMap.AddPheromone(gridPos, PheromoneMap.PheromoneType.Food, strength);
         }
+        // 2. Ants seeking food deposit HOME pheromones (blue)
+        // These lead TO home (for ants carrying food to follow)
         else
         {
-            // When not carrying food, deposit HOME pheromone (trail to home)
-            _pheromoneMap.AddPheromone(gridPos, PheromoneMap.PheromoneType.Home, 0.1f);
+            // When searching for food, deposit HOME pheromone (blue)
+            // The strength is lower when further from home to create a gradient
+            Vector2 homeWorldPos = _environment.GridToWorld(_homePosition) +
+                                 new Vector2(_environment.CellSize.X / 2, _environment.CellSize.Y / 2);
+            float distanceToHome = Position.DistanceTo(homeWorldPos);
+            float maxDistance = 300.0f;
+
+            // Strength decreases with distance from home (stronger near home)
+            float strength = 0.3f * (1.0f - Mathf.Clamp(distanceToHome / maxDistance, 0.0f, 0.7f));
+
+            // CRITICAL: Deposit HOME (blue) pheromone that ants carrying food will follow TO home
+            _pheromoneMap.AddPheromone(gridPos, PheromoneMap.PheromoneType.Home, strength);
         }
     }
 
@@ -340,12 +529,24 @@ public partial class Ant : CharacterBody2D
 
         // Reset state
         CarryingFood = false;
+        DebugLog("Reset to home position");
     }
 
     // Update appearance based on state
     private void UpdateAppearance()
     {
-        Modulate = CarryingFood ? CarryingFoodColor : AntColor;
+        if (IsSelected)
+        {
+            // Use a bright highlight color for selected ant
+            Modulate = CarryingFood ?
+                new Color(1.0f, 0.8f, 0.0f) : // Bright gold when carrying food
+                SelectedColor;                 // Bright cyan when not carrying food
+        }
+        else
+        {
+            // Normal colors for non-selected ants
+            Modulate = CarryingFood ? CarryingFoodColor : AntColor;
+        }
         QueueRedraw();
     }
 
@@ -363,12 +564,38 @@ public partial class Ant : CharacterBody2D
         // Draw triangle for ant
         Vector2[] points = new Vector2[]
         {
-            new Vector2(4, 0),      // Front point
-            new Vector2(-2, -2),    // Back left
-            new Vector2(-2, 2)      // Back right
+        new Vector2(4, 0),      // Front point
+        new Vector2(-2, -2),    // Back left
+        new Vector2(-2, 2)      // Back right
         };
 
         DrawColoredPolygon(points, Modulate);
+
+        // If selected, draw sensor positions and extra debug visualization
+        if (IsSelected)
+        {
+            // Which pheromone type we're following
+            PheromoneMap.PheromoneType type = CarryingFood ?
+                PheromoneMap.PheromoneType.Home : PheromoneMap.PheromoneType.Food;
+
+            // Get sensor info
+            SensorInfo info = Sense(type);
+
+            // Draw circles at sensor positions
+            float sensorRadius = 2.0f;
+
+            // Drawing in local space, so adjust positions
+            DrawCircle(info.leftPos - Position, sensorRadius, Colors.Yellow);
+            DrawCircle(info.centerPos - Position, sensorRadius, Colors.Yellow);
+            DrawCircle(info.rightPos - Position, sensorRadius, Colors.Yellow);
+
+            // Draw line to indicate velocity (current direction)
+            DrawLine(Vector2.Zero, _velocity.Normalized() * 10, Colors.Green, 1.5f);
+
+            // Draw steering force if we have a method to access it
+            Vector2 steeringForce = CalculateSteering(0.016f); // Use a typical delta time
+            DrawLine(Vector2.Zero, steeringForce.Normalized() * 15, Colors.Red, 2.0f);
+        }
     }
 
     // Process
@@ -376,6 +603,50 @@ public partial class Ant : CharacterBody2D
     {
         // Deposit pheromone every frame
         DepositPheromone();
+
+        // Debug keys only work if ant is selected
+        if (IsSelected)
+        {
+            // Debug key: Press F to force deposit food pheromone at current location
+            if (Input.IsKeyPressed(Key.F))
+            {
+                Vector2I gridPos = _environment.WorldToGrid(Position);
+                _pheromoneMap.AddPheromone(gridPos, PheromoneMap.PheromoneType.Food, 1.0f);
+                DebugLog($"DEBUG: Forced food pheromone deposit at {gridPos}");
+            }
+
+            // Debug key: Press H to force deposit home pheromone at current location
+            if (Input.IsKeyPressed(Key.H))
+            {
+                Vector2I gridPos = _environment.WorldToGrid(Position);
+                _pheromoneMap.AddPheromone(gridPos, PheromoneMap.PheromoneType.Home, 1.0f);
+                DebugLog($"DEBUG: Forced home pheromone deposit at {gridPos}");
+            }
+
+            // Debug key: Press T to output current position and sensor readings
+            if (Input.IsKeyPressed(Key.T))
+            {
+                Vector2I gridPos = _environment.WorldToGrid(Position);
+                float foodValue = _pheromoneMap.GetPheromone(gridPos, PheromoneMap.PheromoneType.Food);
+                float homeValue = _pheromoneMap.GetPheromone(gridPos, PheromoneMap.PheromoneType.Home);
+                DebugLog($"Position: {gridPos} - Food pheromone: {foodValue:F3}, Home pheromone: {homeValue:F3}");
+
+                // Test sensor values for both pheromone types
+                SensorInfo foodInfo = Sense(PheromoneMap.PheromoneType.Food);
+                SensorInfo homeInfo = Sense(PheromoneMap.PheromoneType.Home);
+
+                DebugLog($"Food sensors - Left: {foodInfo.leftValue:F3}, Center: {foodInfo.centerValue:F3}, Right: {foodInfo.rightValue:F3}");
+                DebugLog($"Home sensors - Left: {homeInfo.leftValue:F3}, Center: {homeInfo.centerValue:F3}, Right: {homeInfo.rightValue:F3}");
+            }
+
+            // Debug key: Press R to toggle visual rays for wall detection
+            if (Input.IsActionJustPressed("ui_home") || Input.IsKeyPressed(Key.R)) // R key or Home key
+            {
+                _showRays = !_showRays;
+                DebugLog($"Wall detection rays {(_showRays ? "shown" : "hidden")}");
+                QueueRedraw();
+            }
+        }
     }
 
     // Helper class for sensor information
@@ -384,5 +655,11 @@ public partial class Ant : CharacterBody2D
         public float leftValue;
         public float centerValue;
         public float rightValue;
+        public Vector2 leftPos;
+        public Vector2 centerPos;
+        public Vector2 rightPos;
     }
+
+    // Debug visualization
+    private bool _showRays = false;
 }

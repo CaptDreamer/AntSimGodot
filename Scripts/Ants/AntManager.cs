@@ -104,6 +104,38 @@ public partial class AntManager : Node2D
         }
     }
 
+    public override void _Input(InputEvent @event)
+    {
+        if (@event is InputEventMouseButton mouseEvent && mouseEvent.Pressed && mouseEvent.ButtonIndex == MouseButton.Left)
+        {
+            // Get the mouse position
+            Vector2 mousePos = GetGlobalMousePosition();
+
+            // Check if we clicked on an ant
+            float closestDistance = 10.0f; // Selection radius
+            Ant closestAnt = null;
+
+            foreach (Ant ant in _antList)
+            {
+                if (ant == null || !GodotObject.IsInstanceValid(ant))
+                    continue;
+
+                float distance = mousePos.DistanceTo(ant.Position);
+                if (distance < closestDistance)
+                {
+                    closestDistance = distance;
+                    closestAnt = ant;
+                }
+            }
+
+            // If we found an ant close to the click, toggle its selection
+            if (closestAnt != null)
+            {
+                closestAnt.ToggleSelection();
+            }
+        }
+    }
+
     // Event handler for food placement
     private void OnFoodPlaced(Vector2I pos)
     {
