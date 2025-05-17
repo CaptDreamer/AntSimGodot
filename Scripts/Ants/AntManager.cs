@@ -14,6 +14,11 @@ public partial class AntManager : Node2D
     [Export] public int NumAnts = 100;
     private List<Ant> _antList = new List<Ant>();
 
+    // Ant creation controls
+    [Export] public bool AutoSpawnAnts = true;
+    [Export] public int InitialAntCount = 50;
+    [Export] public int MaxAnts = 200;
+
     // Home position (will be set in _Ready)
     private Vector2I _homePos;
 
@@ -40,28 +45,20 @@ public partial class AntManager : Node2D
     private void Initialize()
     {
         // Find home position
-        FindHomePosition();
+        _homePos = _environment.GetHomePosition();
 
         // Connect to environment signals
         _environment.Connect("FoodPlaced", Callable.From<Vector2I>(OnFoodPlaced));
         _environment.Connect("FoodRemoved", Callable.From<Vector2I>(OnFoodRemoved));
 
-        // Create ants
-        SpawnAnts();
-    }
-
-    // Find the home position in the environment
-    private void FindHomePosition()
-    {
-        _homePos = _environment.GetHomePosition();
-    }
-
-    // Spawn the initial ants
-    private void SpawnAnts()
-    {
-        for (int i = 0; i < NumAnts; i++)
+        // Create initial ants
+        if (AutoSpawnAnts)
         {
-            CreateAnt();
+            for (int i = 0; i < InitialAntCount; i++)
+            {
+                CreateAnt();
+            }
+            GD.Print($"Created {InitialAntCount} ants");
         }
     }
 
@@ -102,6 +99,35 @@ public partial class AntManager : Node2D
                 ant.ResetToHome();
             }
         }
+
+        // Clean up invalid ants
+        _antList.RemoveAll(ant => ant == null || !GodotObject.IsInstanceValid(ant));
+
+        // Spawn/remove ants with + and - keys
+        if (Input.IsKeyPressed(Key.Equal) || Input.IsKeyPressed(Key.KpAdd)) // + key
+        {
+            if (_antList.Count < MaxAnts)
+            {
+                CreateAnt();
+                GD.Print($"Created new ant. Total: {_antList.Count}");
+            }
+        }
+
+        if (Input.IsKeyPressed(Key.Minus) || Input.IsKeyPressed(Key.KpSubtract)) // - key
+        {
+            if (_antList.Count > 0)
+            {
+                Ant ant = _antList[_antList.Count - 1];
+                _antList.RemoveAt(_antList.Count - 1);
+
+                if (ant != null && GodotObject.IsInstanceValid(ant))
+                {
+                    ant.QueueFree();
+                }
+
+                GD.Print($"Removed ant. Total: {_antList.Count}");
+            }
+        }
     }
 
     public override void _Input(InputEvent @event)
@@ -129,7 +155,7 @@ public partial class AntManager : Node2D
             }
 
             // If we found an ant close to the click, toggle its selection
-            if (closestAnt != null)
+            if (closestAnt != null && !_environment.PlacingPheromones)
             {
                 closestAnt.ToggleSelection();
             }
@@ -139,14 +165,68 @@ public partial class AntManager : Node2D
     // Event handler for food placement
     private void OnFoodPlaced(Vector2I pos)
     {
-        // Notify ants of new food source if needed
-        // Currently, ants will discover new food through their normal movement
+        // Nothing special needed here, ants will find the food through their movement
     }
 
     // Event handler for food removal
     private void OnFoodRemoved(Vector2I pos)
     {
-        // Notify ants that food was removed if needed
-        // For ants carrying food that was just removed, we might want to reset them
+        // Nothing special needed here
+    }
+
+    // Get the current ant count
+    public int GetAntCount()
+    {
+        return _antList.Count;
+    }
+
+    // Add multiple ants at once
+    public void AddAnts(int count)
+    {
+        int antsToAdd = Math.Min(count, MaxAnts - _antList.Count);
+
+        for (int i = 0; i < antsToAdd; i++)
+        {
+            CreateAnt();
+        }
+
+        GD.Print($"Added {antsToAdd} ants. Total: {_antList.Count}");
+    }
+
+    // Remove multiple ants at once
+    public void RemoveAnts(int count)
+    {
+        int antsToRemove = Math.Min(count, _antList.Count);
+
+        for (int i = 0; i < antsToRemove; i++)
+        {
+            if (_antList.Count == 0)
+                break;
+
+            Ant ant = _antList[_antList.Count - 1];
+            _antList.RemoveAt(_antList.Count - 1);
+
+            if (ant != null && GodotObject.IsInstanceValid(ant))
+            {
+                ant.QueueFree();
+            }
+        }
+
+        GD.Print($"Removed {antsToRemove} ants. Total: {_antList.Count}");
+    }
+
+    // Remove all ants
+    public void ClearAllAnts()
+    {
+        foreach (Ant ant in _antList)
+        {
+            if (ant != null && GodotObject.IsInstanceValid(ant))
+            {
+                ant.QueueFree();
+            }
+        }
+
+        _antList.Clear();
+        GD.Print("All ants removed");
     }
 }

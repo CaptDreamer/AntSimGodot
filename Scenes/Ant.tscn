@@ -1,13 +1,30 @@
-[gd_scene load_steps=3 format=3 uid="uid://dnbweodlovp0q"]
+[gd_scene load_steps=2 format=3 uid="uid://dnbweodlovp0q"]
 
 [ext_resource type="Script" uid="uid://b13se8hv04rf0" path="res://Scripts/Ants/Ant.cs" id="1_1vmwb"]
-
-[sub_resource type="CircleShape2D" id="CircleShape2D_7lpof"]
-radius = 2.0
 
 [node name="Ant" type="CharacterBody2D"]
 script = ExtResource("1_1vmwb")
 MoveSpeed = 500.0
+PheromoneInfluence = 4.0
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-shape = SubResource("CircleShape2D_7lpof")
+
+[node name="Sensors" type="Node2D" parent="."]
+
+[node name="LeftSensor" type="Marker2D" parent="Sensors"]
+position = Vector2(-8, -8)
+
+[node name="Visualizer" type="Node2D" parent="Sensors/LeftSensor"]
+visible = false
+
+[node name="CenterSensor" type="Marker2D" parent="Sensors"]
+position = Vector2(12, 0)
+
+[node name="Visualizer" type="Node2D" parent="Sensors/CenterSensor"]
+visible = false
+
+[node name="RightSensor" type="Marker2D" parent="Sensors"]
+position = Vector2(-8, 8)
+
+[node name="Visualizer" type="Node2D" parent="Sensors/RightSensor"]
+visible = false
