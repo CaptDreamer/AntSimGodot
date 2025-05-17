@@ -25,6 +25,15 @@ public partial class Environment : Node2D
     private Color _foodColor = new Color(0.0f, 0.7f, 0.0f);
     private Color _homeColor = new Color(0.7f, 0.0f, 0.0f);
 
+    // Pheromone placement
+    private PheromoneMap _pheromoneMap;
+    private PheromoneMap.PheromoneType _selectedPheromoneType = PheromoneMap.PheromoneType.Food;
+    [Export] public float PheromoneStrength = 1.0f;
+    [Export] public bool PlacingPheromones = false;
+
+    // Pheromone brush size (in cells)
+    [Export] public int PheromoneSize = 1;
+
     // Debug mode
     [Export] public bool DebugMode = false;
     [Export] public bool ShowGrid = false;
@@ -34,10 +43,18 @@ public partial class Environment : Node2D
     [Signal] public delegate void WallPlacedEventHandler(Vector2I position);
     [Signal] public delegate void FoodRemovedEventHandler(Vector2I position);
     [Signal] public delegate void WallRemovedEventHandler(Vector2I position);
+    [Signal] public delegate void PheromoneTypeChangedEventHandler(PheromoneMap.PheromoneType type);
 
-    // Called when the node enters the scene tree for the first time
+    // Called when the node enters the scene tree
     public override void _Ready()
     {
+        // Get reference to the pheromone map
+        _pheromoneMap = GetNode<PheromoneMap>("../PheromoneMap");
+        if (_pheromoneMap == null)
+        {
+            GD.PrintErr("Failed to get PheromoneMap reference!");
+        }
+
         // Initialize the grid
         InitializeGrid();
 
@@ -46,6 +63,8 @@ public partial class Environment : Node2D
 
         GD.Print("Environment ready. Grid size: " + GridSize + ", Cell size: " + CellSize);
         GD.Print("Left-click to place walls, right-click to place food. Hold Shift+click to remove.");
+        GD.Print("Press 1 to select food pheromone (red), 2 to select home pheromone (blue).");
+        GD.Print("Press P to toggle pheromone placement mode. Use mouse wheel to adjust pheromone size.");
     }
 
     // Initialize the grid with empty cells
@@ -89,38 +108,145 @@ public partial class Environment : Node2D
         GD.Print("Boundary walls created");
     }
 
+    // Place pheromone at the given grid position
+    private void PlacePheromoneAtPosition(Vector2I gridPos)
+    {
+        if (_pheromoneMap == null || !IsValidGridPosition(gridPos))
+            return;
+
+        // Skip walls
+        if (GetCellType(gridPos) == CellType.Wall)
+            return;
+
+        // Place pheromone with the current brush size
+        for (int x = -PheromoneSize + 1; x < PheromoneSize; x++)
+        {
+            for (int y = -PheromoneSize + 1; y < PheromoneSize; y++)
+            {
+                Vector2I brushPos = new Vector2I(gridPos.X + x, gridPos.Y + y);
+
+                // Check if within grid and not a wall
+                if (IsValidGridPosition(brushPos) && GetCellType(brushPos) != CellType.Wall)
+                {
+                    // Calculate distance from center of brush for gradient effect
+                    float distance = gridPos.DistanceTo(brushPos);
+                    float distanceFactor = 1.0f - (distance / PheromoneSize);
+                    if (distanceFactor <= 0)
+                        continue;
+
+                    // Scale strength by distance from center
+                    float strength = PheromoneStrength * distanceFactor;
+
+                    // Deposit pheromone
+                    _pheromoneMap.AddPheromone(brushPos, _selectedPheromoneType, strength);
+                }
+            }
+        }
+    }
+
     // Process direct input
     public override void _UnhandledInput(InputEvent @event)
     {
-        if (@event is InputEventMouseButton mouseButton)
+        // Handle pheromone type selection
+        if (@event is InputEventKey keyEvent && keyEvent.Pressed)
         {
-            if (mouseButton.Pressed)
+            // 1 key selects food pheromone (red)
+            if (keyEvent.Keycode == Key.Key1)
             {
-                Vector2I gridPos = WorldToGrid(GetGlobalMousePosition());
+                _selectedPheromoneType = PheromoneMap.PheromoneType.Food;
+                GD.Print("Selected Food pheromone (RED)");
+                EmitSignal(SignalName.PheromoneTypeChanged, (int)_selectedPheromoneType);
+            }
+            // 2 key selects home pheromone (blue)
+            else if (keyEvent.Keycode == Key.Key2)
+            {
+                _selectedPheromoneType = PheromoneMap.PheromoneType.Home;
+                GD.Print("Selected Home pheromone (BLUE)");
+                EmitSignal(SignalName.PheromoneTypeChanged, (int)_selectedPheromoneType);
+            }
+            // P key toggles pheromone placement mode
+            else if (keyEvent.Keycode == Key.P)
+            {
+                PlacingPheromones = !PlacingPheromones;
+                GD.Print($"Pheromone placement mode: {(PlacingPheromones ? "ON" : "OFF")}");
+            }
+        }
 
-                if (IsValidGridPosition(gridPos))
+        // Handle mouse wheel for pheromone size
+        if (@event is InputEventMouseButton mouseWheel && PlacingPheromones)
+        {
+            if (mouseWheel.ButtonIndex == MouseButton.WheelUp)
+            {
+                PheromoneSize = Mathf.Clamp(PheromoneSize + 1, 1, 10);
+                GD.Print($"Pheromone brush size: {PheromoneSize}");
+            }
+            else if (mouseWheel.ButtonIndex == MouseButton.WheelDown)
+            {
+                PheromoneSize = Mathf.Clamp(PheromoneSize - 1, 1, 10);
+                GD.Print($"Pheromone brush size: {PheromoneSize}");
+            }
+        }
+
+        // Handle mouse button for placing pheromones or food/walls
+        if (@event is InputEventMouseButton mouseButton && mouseButton.Pressed)
+        {
+            Vector2I gridPos = WorldToGrid(GetGlobalMousePosition());
+
+            if (IsValidGridPosition(gridPos))
+            {
+                // Left mouse button for walls OR pheromones
+                if (mouseButton.ButtonIndex == MouseButton.Left)
                 {
-                    // Only use right mouse button now for food placement/removal
-                    if (mouseButton.ButtonIndex == MouseButton.Right)
+                    if (PlacingPheromones)
                     {
-                        // Right click to place food
+                        // Place pheromone when in pheromone mode
+                        PlacePheromoneAtPosition(gridPos);
+                    }
+                    else
+                    {
+                        // Place/remove walls when not in pheromone mode
+                        // Walls remain deactivated for now - uncomment to enable
+                        /*
                         if (Input.IsKeyPressed(Key.Shift))
                         {
-                            // With shift held, remove food
-                            if (GetCellType(gridPos) == CellType.Food)
+                            // With shift held, remove walls
+                            if (GetCellType(gridPos) == CellType.Wall)
                             {
                                 SetCellType(gridPos, CellType.Empty);
-                                EmitSignal(SignalName.FoodRemoved, gridPos);
+                                EmitSignal(SignalName.WallRemoved, gridPos);
                             }
                         }
                         else
                         {
-                            // Don't overwrite home or wall
+                            // Don't overwrite food or home
                             if (GetCellType(gridPos) == CellType.Empty)
                             {
-                                SetCellType(gridPos, CellType.Food);
-                                EmitSignal(SignalName.FoodPlaced, gridPos);
+                                SetCellType(gridPos, CellType.Wall);
+                                EmitSignal(SignalName.WallPlaced, gridPos);
                             }
+                        }
+                        */
+                    }
+                }
+                // Right mouse button for food
+                else if (mouseButton.ButtonIndex == MouseButton.Right && !PlacingPheromones)
+                {
+                    if (Input.IsKeyPressed(Key.Shift))
+                    {
+                        // With shift held, remove food
+                        if (GetCellType(gridPos) == CellType.Food)
+                        {
+                            SetCellType(gridPos, CellType.Empty);
+                            EmitSignal(SignalName.FoodRemoved, gridPos);
+                        }
+                    }
+                    else
+                    {
+                        // Don't overwrite home or wall
+                        if (GetCellType(gridPos) == CellType.Empty)
+                        {
+                            SetCellType(gridPos, CellType.Food);
+                            EmitSignal(SignalName.FoodPlaced, gridPos);
                         }
                     }
                 }
@@ -134,8 +260,41 @@ public partial class Environment : Node2D
 
             if (IsValidGridPosition(gridPos))
             {
-                // Only handle right mouse button for food placement/removal
-                if ((motion.ButtonMask & MouseButtonMask.Right) != 0)
+                // Left mouse button for walls OR pheromones
+                if ((motion.ButtonMask & MouseButtonMask.Left) != 0)
+                {
+                    if (PlacingPheromones)
+                    {
+                        // Place pheromones when in pheromone mode
+                        PlacePheromoneAtPosition(gridPos);
+                    }
+                    else
+                    {
+                        // Place/remove walls when not in pheromone mode - disabled for now
+                        /*
+                        if (Input.IsKeyPressed(Key.Shift))
+                        {
+                            // Erase walls
+                            if (GetCellType(gridPos) == CellType.Wall)
+                            {
+                                SetCellType(gridPos, CellType.Empty);
+                                EmitSignal(SignalName.WallRemoved, gridPos);
+                            }
+                        }
+                        else
+                        {
+                            // Draw walls - don't overwrite food or home
+                            if (GetCellType(gridPos) == CellType.Empty)
+                            {
+                                SetCellType(gridPos, CellType.Wall);
+                                EmitSignal(SignalName.WallPlaced, gridPos);
+                            }
+                        }
+                        */
+                    }
+                }
+                // Right mouse button for food (when not in pheromone mode)
+                else if ((motion.ButtonMask & MouseButtonMask.Right) != 0 && !PlacingPheromones)
                 {
                     if (Input.IsKeyPressed(Key.Shift))
                     {
@@ -212,20 +371,59 @@ public partial class Environment : Node2D
                 DrawLine(start, end, new Color(0.5f, 0.5f, 0.5f, 0.2f));
             }
         }
-    }
 
-    // Helper methods for grid operations
+        // Draw pheromone brush preview when in placement mode
+        if (PlacingPheromones)
+        {
+            Vector2I gridPos = WorldToGrid(GetGlobalMousePosition());
+            if (IsValidGridPosition(gridPos))
+            {
+                Vector2 worldPos = GridToWorld(gridPos);
 
-    // Convert grid position to world position
-    public Vector2 GridToWorld(Vector2I gridPos)
-    {
-        return new Vector2(gridPos.X * CellSize.X, gridPos.Y * CellSize.Y);
+                // Determine color based on selected pheromone type
+                Color previewColor = _selectedPheromoneType == PheromoneMap.PheromoneType.Food ?
+                    new Color(1.0f, 0.0f, 0.0f, 0.3f) : // Red for food pheromone
+                    new Color(0.0f, 0.0f, 1.0f, 0.3f);  // Blue for home pheromone
+
+                // Draw brush preview
+                int size = PheromoneSize * 2 - 1;
+                int offset = PheromoneSize - 1;
+                DrawRect(
+                    new Rect2(
+                        worldPos.X - (offset * CellSize.X),
+                        worldPos.Y - (offset * CellSize.Y),
+                        size * CellSize.X,
+                        size * CellSize.Y
+                    ),
+                    previewColor,
+                    true
+                );
+
+                // Draw brush outline
+                DrawRect(
+                    new Rect2(
+                        worldPos.X - (offset * CellSize.X),
+                        worldPos.Y - (offset * CellSize.Y),
+                        size * CellSize.X,
+                        size * CellSize.Y
+                    ),
+                    new Color(1.0f, 1.0f, 1.0f, 0.5f),
+                    false
+                );
+            }
+        }
     }
 
     // Called every frame
     public override void _Process(double delta)
     {
-        // Toggle grid visibility with G key
+        // Queue redraw when in pheromone placement mode to update brush preview
+        if (PlacingPheromones)
+        {
+            QueueRedraw();
+        }
+
+        // Toggle grid visibility with I key
         if (Input.IsKeyPressed(Key.I))
         {
             ShowGrid = !ShowGrid;
@@ -251,6 +449,19 @@ public partial class Environment : Node2D
             ClearAllExceptBoundary();
             GD.Print("Environment reset - boundaries preserved");
         }
+
+        // Clear all pheromones with F4 key
+        if (Input.IsKeyPressed(Key.F4) && _pheromoneMap != null)
+        {
+            _pheromoneMap.ClearAllPheromones();
+            GD.Print("All pheromones cleared");
+        }
+    }
+
+    // Convert grid position to world position
+    public Vector2 GridToWorld(Vector2I gridPos)
+    {
+        return new Vector2(gridPos.X * CellSize.X, gridPos.Y * CellSize.Y);
     }
 
     // Convert world position to grid position

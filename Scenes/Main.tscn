@@ -15,11 +15,15 @@ offset = Vector2(512, 300)
 
 [node name="PheromoneMap" type="Node2D" parent="."]
 script = ExtResource("2_idj7w")
-EvaporationRate = 0.005
+EvaporationRate = 0.001
 MaxPheromone = 1.5
+MaxAge = 1000.0
 
 [node name="AntManager" type="Node2D" parent="."]
 script = ExtResource("3_kln2b")
 AntScene = ExtResource("4_rgh2o")
+NumAnts = 20
+InitialAntCount = 20
+MaxAnts = 2000
 
 [node name="Ants" type="Node2D" parent="AntManager"]
